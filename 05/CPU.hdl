@@ -39,5 +39,68 @@ CHIP CPU {
         pc[15];          // address of next instruction
 
     PARTS:
-    // Put your code here:
+    // -----------------------------------------------------------------
+    // 1. 指令解碼與 A 暫存器 (ARegister)
+    // -----------------------------------------------------------------
+    // 判斷是否為 C 指令
+    Not(in=instruction[15], out=isA);
+    Not(in=isA, out=isC);
+
+    // Mux16: 當是 A 指令時輸入為指令本身，當是 C 指令時輸入為 ALU 的計算結果 (aluOut)
+    Mux16(a=instruction, b=aluOut, sel=isC, out=aInput);
+
+    // A 暫存器更新條件：當是 A 指令 OR (C 指令且 destination包含 A, 即 instruction[5]==1)
+    And(a=isC, b=instruction[5], out=isCWriteA);
+    Or(a=isA, b=isCWriteA, out=loadA);
+    ARegister(in=aInput, load=loadA, out=aOut, out[0..14]=addressM);
+
+    // -----------------------------------------------------------------
+    // 2. D 暫存器 (DRegister) 與 ALU 輸入選擇
+    // -----------------------------------------------------------------
+    // D 暫存器更新條件：是 C 指令 AND destination 包含 D (instruction[4]==1)
+    And(a=isC, b=instruction[4], out=loadD);
+    DRegister(in=aluOut, load=loadD, out=dOut);
+
+    // Mux16: 根據 instruction[12] (a-bit) 決定 ALU 的另一個輸入是 A 暫存器還是 Memory (inM)
+    Mux16(a=aOut, b=inM, sel=instruction[12], out=aOrM);
+
+    // -----------------------------------------------------------------
+    // 3. ALU 計算單位
+    // -----------------------------------------------------------------
+    ALU(
+        x=dOut, y=aOrM, 
+        zx=instruction[11], nx=instruction[10], 
+        zy=instruction[9],  ny=instruction[8], 
+        f=instruction[7],   no=instruction[6], 
+        out=aluOut, out=outM, 
+        zr=zr, ng=ng
+    );
+
+    // 控制是否寫入外部 Memory (writeM)：是 C 指令 AND destination 包含 M (instruction[3]==1)
+    And(a=isC, b=instruction[3], out=writeM);
+
+    // -----------------------------------------------------------------
+    // 4. PC (程式計數器) 與 Jump 邏輯判斷
+    // -----------------------------------------------------------------
+    // 根據 ALU 輸出的 zr 與 ng 算出是否為正數 (pos)
+    Or(a=zr, b=ng, out=notPos);
+    Not(in=notPos, out=pos);
+
+    // 檢查各跳轉條件：
+    // j1 (instruction[2]): 小於 0 (ng)
+    // j2 (instruction[1]): 等於 0 (zr)
+    // j3 (instruction[0]): 大於 0 (pos)
+    And(a=instruction[2], b=ng, out=jLt);
+    And(a=instruction[1], b=zr, out=jEq);
+    And(a=instruction[0], b=pos, out=jGt);
+
+    // 符合任意跳轉條件
+    Or(a=jLt, b=jEq, out=jLtEq);
+    Or(a=jLtEq, b=jGt, out=jumpCond);
+
+    // 必須是 C 指令且滿足條件才跳轉
+    And(a=isC, b=jumpCond, out=loadPC);
+
+    // PC 晶片連線 (若不跳轉，預設就是 inc=true 自增 1)
+    PC(in=aOut, load=loadPC, inc=true, reset=reset, out[0..14]=pc);
 }
